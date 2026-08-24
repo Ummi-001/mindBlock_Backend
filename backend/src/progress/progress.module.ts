@@ -13,6 +13,7 @@ import { ProgressCalculationProvider } from './providers/progress-calculation.pr
 import { Puzzle } from '../puzzles/entities/puzzle.entity';
 import { XpLevelService } from '../users/providers/xp-level.service';
 import { ScoreService } from '../score/providers/score.service';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 import { BlockchainModule } from '../blockchain/blockchain.module';
 
 @Module({
@@ -21,6 +22,7 @@ import { BlockchainModule } from '../blockchain/blockchain.module';
     // BlockchainService is needed by ProgressCalculationProvider for
     // submitPuzzleOnChain after puzzle answer verification.
     BlockchainModule,
+    IdempotencyModule,
   ],
   controllers: [ProgressController],
   providers: [

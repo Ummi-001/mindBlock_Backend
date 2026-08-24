@@ -7,6 +7,7 @@ import { UsersModule } from '../users/users.module';
 import { ChallengeAttemptService } from './providers/challenge-attempt.service';
 import { ChallengeAttemptController } from './controllers/challenge-attempt.controller';
 import { ChallengeValidationService } from './providers/challenge-validation.service';
+import { IdempotencyModule } from '../common/idempotency/idempotency.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { ChallengeValidationService } from './providers/challenge-validation.ser
     // ChallengeAttempt entity).
     TypeOrmModule.forFeature([ChallengeAttempt, Puzzle, GameSession]),
     UsersModule, // for XpLevelService
+    IdempotencyModule,
   ],
   controllers: [ChallengeAttemptController],
   providers: [ChallengeAttemptService, ChallengeValidationService],

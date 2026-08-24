@@ -18,6 +18,8 @@ import { CreateChallengeAttemptDto } from '../dtos/create-challenge-attempt.dto'
 import { SubmitAttemptDto } from '../dtos/submit-attempt.dto';
 import { RevealSolutionDto } from '../dtos/reveal-solution.dto';
 import { UseHintDto } from '../dtos/use-hint.dto';
+import { SubmitAttemptResponseDto } from '../dtos/submit-attempt-response.dto';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
 import {
   afterEach,
   beforeEach,
@@ -140,6 +142,7 @@ describe('ChallengeAttemptService', () => {
   let service: ChallengeAttemptService;
   let attemptRepo: jest.Mocked<Repository<ChallengeAttempt>>;
   let puzzleRepo: jest.Mocked<Repository<Puzzle>>;
+  let idempotencyService: { execute: jest.Mock<any> };
   let xpLevelService: jest.Mocked<Pick<XpLevelService, 'addXp'>>;
   let dataSource: { transaction: jest.Mock };
 
@@ -162,6 +165,9 @@ describe('ChallengeAttemptService', () => {
       findOneBy: jest.fn(),
     };
 
+    const mockIdempotencyService = {
+      execute: jest.fn(),
+    };
     xpLevelService = { addXp: jest.fn() };
     dataSource = { transaction: jest.fn() };
 
@@ -180,6 +186,10 @@ describe('ChallengeAttemptService', () => {
           useValue: mockPuzzleRepo,
         },
         {
+          provide: IdempotencyService,
+          useValue: mockIdempotencyService,
+        },
+        {
           // Read-only lookup in resolveSessionTarget(); no test currently
           // exercises a real GameSession row, so a bare jest.fn() (always
           // undefined/never called) is enough — the mock EntityManager's
@@ -196,6 +206,7 @@ describe('ChallengeAttemptService', () => {
     service = module.get<ChallengeAttemptService>(ChallengeAttemptService);
     attemptRepo = module.get(getRepositoryToken(ChallengeAttempt));
     puzzleRepo = module.get(getRepositoryToken(Puzzle));
+    idempotencyService = module.get(IdempotencyService);
   });
 
   afterEach(() => {
@@ -281,6 +292,37 @@ describe('ChallengeAttemptService', () => {
       timeSpent: 30,
     };
     const userId = 'user-1';
+
+    /** Sets up idempotencyService.execute to simply call the inner fn (first request, not a duplicate). */
+    beforeEach(() => {
+      idempotencyService.execute!.mockImplementation(
+        async (key: string, fn: () => Promise<any>) => {
+          const data = await fn();
+          return { duplicate: false, data };
+        },
+      );
+    });
+
+    /** Helper: sets up idempotencyService.execute to call the fn (first request). */
+    function mockFirstRequest(attempt: ChallengeAttempt, puzzle: Puzzle, savedAttempt: ChallengeAttempt) {
+      idempotencyService.execute!.mockImplementation(
+        async (key: string, fn: () => Promise<ChallengeAttempt>) => {
+          attemptRepo.findOneBy!.mockResolvedValue(attempt);
+          puzzleRepo.findOneBy!.mockResolvedValue(puzzle);
+          attemptRepo.save!.mockResolvedValue(savedAttempt);
+          const data = await fn();
+          return { duplicate: false, data };
+        },
+      );
+    }
+
+    /** Helper: sets up idempotencyService.execute to return a cached result (duplicate). */
+    function mockDuplicateRequest(cachedAttempt: ChallengeAttempt) {
+      idempotencyService.execute!.mockResolvedValue({
+        duplicate: true,
+        data: cachedAttempt,
+      });
+    }
 
     it('should mark attempt CORRECT, award score, XP, and record progress for a correct answer', async () => {
       const attempt = makeAttempt({ sessionId: undefined });
@@ -453,6 +495,16 @@ describe('ChallengeAttemptService', () => {
       timeSpent: 30,
     };
     const userId = 'user-1';
+
+    /** Sets up idempotencyService.execute to simply call the inner fn (first request, not a duplicate). */
+    beforeEach(() => {
+      idempotencyService.execute!.mockImplementation(
+        async (key: string, fn: () => Promise<any>) => {
+          const data = await fn();
+          return { duplicate: false, data };
+        },
+      );
+    });
 
     it('excludes already-attempted-in-session and the current challenge from next-challenge selection', async () => {
       const attempt = makeAttempt({ sessionId: 'sess-1' });
@@ -633,6 +685,201 @@ describe('ChallengeAttemptService', () => {
         (call) => call[0] === UserProgress,
       );
       expect(progressSaves).toHaveLength(1);
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Idempotency tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    describe('idempotency', () => {
+      it('should return cached result for a duplicate submission with the same idempotencyKey', async () => {
+        const cachedResult: SubmitAttemptResponseDto = {
+          attempt: makeAttempt({
+            status: AttemptStatus.CORRECT,
+            score: 125,
+            answer: '4',
+            submittedAt: new Date(),
+          }),
+          isCorrect: true,
+          feedback: 'Correct!',
+          xp: { awarded: 125, levelUp: false, currentLevel: 1, currentXp: 0 },
+          progress: { attemptsInSession: 1, sessionTarget: 5, sessionCompleted: false },
+          nextChallenge: null,
+          isDuplicateReplay: false,
+        };
+
+        idempotencyService.execute!.mockResolvedValue({
+          duplicate: true,
+          data: cachedResult,
+        });
+
+        const result = await service.submitAttempt({
+          ...dto,
+          idempotencyKey: 'idempotency-key-abc',
+        }, userId);
+
+        expect(result).toBe(cachedResult);
+        expect(result.isCorrect).toBe(true);
+        expect(result.attempt.score).toBe(125);
+        // The inner function should NOT have touched the repos
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      });
+
+      it('should derive a deterministic key when idempotencyKey is not provided', async () => {
+        const attempt = makeAttempt({ sessionId: undefined });
+        const puzzle = makePuzzle();
+        const manager = makeMockManager({ attempt, puzzle, nextPuzzleCandidates: [] });
+        dataSource.transaction.mockImplementation((cb: any) => cb(manager));
+        xpLevelService.addXp.mockResolvedValue({
+          levelUp: false,
+          currentLevel: 1,
+          currentXp: 100,
+          previousLevel: 1,
+        });
+
+        // Mock idempotencyService.execute to call the inner function
+        idempotencyService.execute!.mockImplementation(
+          async (key: string, fn: () => Promise<SubmitAttemptResponseDto>) => {
+            const data = await fn();
+            return { duplicate: false, data };
+          },
+        );
+
+        await service.submitAttempt(dto, userId);
+
+        // Verify idempotencyService.execute was called with a derived key
+        expect(idempotencyService.execute).toHaveBeenCalledWith(
+          expect.stringMatching(/^attempt-submit:[a-f0-9]{32}$/),
+          expect.any(Function),
+        );
+      });
+
+      it('should use the client-provided idempotencyKey as the Redis key', async () => {
+        const attempt = makeAttempt({ sessionId: undefined });
+        const puzzle = makePuzzle();
+        const manager = makeMockManager({ attempt, puzzle, nextPuzzleCandidates: [] });
+        dataSource.transaction.mockImplementation((cb: any) => cb(manager));
+        xpLevelService.addXp.mockResolvedValue({
+          levelUp: false,
+          currentLevel: 1,
+          currentXp: 100,
+          previousLevel: 1,
+        });
+
+        idempotencyService.execute!.mockImplementation(
+          async (key: string, fn: () => Promise<SubmitAttemptResponseDto>) => {
+            const data = await fn();
+            return { duplicate: false, data };
+          },
+        );
+
+        const customKey = 'my-custom-idempotency-key';
+        await service.submitAttempt({
+          ...dto,
+          idempotencyKey: customKey,
+        }, userId);
+
+        expect(idempotencyService.execute).toHaveBeenCalledWith(
+          `attempt-submit:${customKey}`,
+          expect.any(Function),
+        );
+      });
+
+      it('should prevent double XP awards on duplicate submissions', async () => {
+        const cachedResult: SubmitAttemptResponseDto = {
+          attempt: makeAttempt({
+            status: AttemptStatus.CORRECT,
+            score: 200,
+            answer: '4',
+            submittedAt: new Date(),
+          }),
+          isCorrect: true,
+          feedback: 'Correct!',
+          xp: { awarded: 200, levelUp: false, currentLevel: 1, currentXp: 0 },
+          progress: { attemptsInSession: 1, sessionTarget: 5, sessionCompleted: false },
+          nextChallenge: null,
+          isDuplicateReplay: false,
+        };
+
+        // First submission
+        idempotencyService.execute!.mockResolvedValueOnce({
+          duplicate: false,
+          data: cachedResult,
+        });
+        const result1 = await service.submitAttempt({
+          ...dto,
+          idempotencyKey: 'duplicate-xp-test',
+        }, userId);
+        expect(result1.isCorrect).toBe(true);
+        expect(result1.attempt.score).toBe(200);
+
+        // Second submission with the same key — should return cached, no re-grading
+        idempotencyService.execute!.mockResolvedValueOnce({
+          duplicate: true,
+          data: cachedResult,
+        });
+        const result2 = await service.submitAttempt({
+          ...dto,
+          idempotencyKey: 'duplicate-xp-test',
+        }, userId);
+        expect(result2).toBe(cachedResult);
+        expect(result2.attempt.score).toBe(200);
+
+        // The transaction should NOT have been called for the duplicate
+        expect(dataSource.transaction).not.toHaveBeenCalled();
+      });
+
+      it('should allow different idempotencyKeys for different submissions', async () => {
+        const attempt1 = makeAttempt({ sessionId: undefined });
+        const attempt2 = makeAttempt(); // fresh mutable attempt
+        const puzzle = makePuzzle();
+
+        const manager1 = makeMockManager({ attempt: attempt1, puzzle, nextPuzzleCandidates: [] });
+        const manager2 = makeMockManager({ attempt: attempt2, puzzle, nextPuzzleCandidates: [] });
+
+        // First call with key-1
+        dataSource.transaction.mockImplementationOnce((cb: any) => cb(manager1));
+        xpLevelService.addXp.mockResolvedValue({
+          levelUp: false,
+          currentLevel: 1,
+          currentXp: 100,
+          previousLevel: 1,
+        });
+        idempotencyService.execute!.mockImplementationOnce(
+          async (key: string, fn: () => Promise<SubmitAttemptResponseDto>) => {
+            const data = await fn();
+            return { duplicate: false, data };
+          },
+        );
+
+        const result1 = await service.submitAttempt({
+          ...dto,
+          idempotencyKey: 'key-1',
+        }, userId);
+        expect(result1.isCorrect).toBe(true);
+
+        // Second call with key-2 — different idempotency key
+        dataSource.transaction.mockImplementationOnce((cb: any) => cb(manager2));
+        xpLevelService.addXp.mockResolvedValue({
+          levelUp: false,
+          currentLevel: 1,
+          currentXp: 100,
+          previousLevel: 1,
+        });
+        idempotencyService.execute!.mockImplementationOnce(
+          async (key: string, fn: () => Promise<SubmitAttemptResponseDto>) => {
+            const data = await fn();
+            return { duplicate: false, data };
+          },
+        );
+
+        const result2 = await service.submitAttempt({
+          ...dto,
+          answer: 'wrong',
+          idempotencyKey: 'key-2',
+        }, userId);
+        expect(result2.isCorrect).toBe(false);
+      });
     });
   });
 

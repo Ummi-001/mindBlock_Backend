@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Not, Repository } from 'typeorm';
+import { createHash } from 'crypto';
 import { ChallengeAttempt } from '../entities/challenge-attempt.entity';
 import { Puzzle } from '../../puzzles/entities/puzzle.entity';
 import { UserProgress } from '../../progress/entities/progress.entity';
@@ -21,6 +23,7 @@ import {
   SubmitAttemptResponseDto,
 } from '../dtos/submit-attempt-response.dto';
 import { ChallengeValidationService } from './challenge-validation.service';
+import { IdempotencyService } from '../../common/idempotency/idempotency.service';
 
 /** Terminal states where no further mutations are allowed. */
 const TERMINAL_STATES = new Set<AttemptStatus>([
@@ -38,6 +41,8 @@ const UUID_V4_REGEX =
 
 @Injectable()
 export class ChallengeAttemptService {
+  private readonly logger = new Logger(ChallengeAttemptService.name);
+
   /**
    * Fallback session-length target, used only when `attempt.sessionId`
    * doesn't resolve to a real `GameSession` row (e.g. legacy callers that
@@ -59,6 +64,7 @@ export class ChallengeAttemptService {
     private readonly challengeValidationService: ChallengeValidationService,
     private readonly xpLevelService: XpLevelService,
     private readonly dataSource: DataSource,
+    private readonly idempotencyService: IdempotencyService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -107,13 +113,49 @@ export class ChallengeAttemptService {
    * post-submission pipeline: validate → persist → update progress →
    * calculate score/XP → select next challenge → detect session completion.
    *
-   * Idempotent: a repeat submit on an attempt that's already terminal
-   * (CORRECT/INCORRECT/EXPIRED) does not re-grade, re-award XP, or
-   * re-select a next challenge — it returns the originally-persisted result
-   * with `isDuplicateReplay: true`. A pessimistic write lock on the attempt
-   * row also prevents two concurrent first-time submits from double-awarding.
+   * - Validates the attempt exists and is in a submittable state.
+   * - Compares the answer against the puzzle's correct answer (case-insensitive
+   *   with whitespace trimming).
+   * - Sets status to CORRECT or INCORRECT, records timeSpent and submittedAt.
+   * - Awards score only on correct answers (unless solution was already
+   *   revealed, which forfeits scoring).
+   * - Records progress, awards XP, selects next challenge, detects session completion.
+   *
+   * Idempotent at two levels:
+   * 1. Redis-based: If an idempotencyKey is provided (or can be derived), duplicate
+   *    submissions are detected and the original result is returned without
+   *    re-processing — preventing double XP awards, double session advances,
+   *    and duplicate reward eligibility.
+   * 2. Database-based: A pessimistic write lock on the attempt row also prevents
+   *    two concurrent first-time submits from double-awarding.
    */
   async submitAttempt(
+    dto: SubmitAttemptDto,
+    userId: string,
+  ): Promise<SubmitAttemptResponseDto> {
+    const idempotencyKey =
+      dto.idempotencyKey ?? this.deriveIdempotencyKey(dto);
+
+    const { duplicate, data: result } =
+      await this.idempotencyService.execute<SubmitAttemptResponseDto>(
+        `attempt-submit:${idempotencyKey}`,
+        () => this.processSubmitAttempt(dto, userId),
+      );
+
+    if (duplicate) {
+      this.logger.log(
+        `Duplicate submission detected for key: ${idempotencyKey}. Returning cached result.`,
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Internal method that performs the actual submission logic.
+   * Called inside an idempotency guard — only executes once per key.
+   */
+  private async processSubmitAttempt(
     dto: SubmitAttemptDto,
     userId: string,
   ): Promise<SubmitAttemptResponseDto> {
@@ -410,6 +452,18 @@ export class ChallengeAttemptService {
       timeLimit: puzzle.timeLimit,
       categoryId: puzzle.categoryId,
     };
+  }
+
+  /**
+   * Derives a deterministic idempotency key from the request parameters
+   * when the client doesn't provide one. This prevents double-processing
+   * of the exact same logical request, but does NOT protect against
+   * retries with a different answer (which is correct — a retry with a
+   * different answer is a new submission attempt).
+   */
+  private deriveIdempotencyKey(dto: SubmitAttemptDto): string {
+    const payload = `${dto.attemptId}:${dto.answer}:${dto.timeSpent}`;
+    return createHash('sha256').update(payload).digest('hex').slice(0, 32);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

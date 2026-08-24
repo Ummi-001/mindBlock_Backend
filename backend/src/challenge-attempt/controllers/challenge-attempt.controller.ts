@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -14,6 +15,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiParam,
   ApiResponse,
@@ -87,7 +89,14 @@ export class ChallengeAttemptController {
       'the attempt, records progress, calculates score and XP, selects the ' +
       'next challenge, and detects session completion. Idempotent: a repeat ' +
       'submit on an already-graded attempt returns the original cached result ' +
-      '(isDuplicateReplay: true) instead of re-running the pipeline.',
+      '(isDuplicateReplay: true) instead of re-running the pipeline. ' +
+      'Supports Redis-based idempotency via the Idempotency-Key header or the idempotencyKey body field.',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Client-generated idempotency key (UUID v4 recommended). Prevents duplicate XP awards, session advances, and reward eligibility on retries.',
   })
   @ApiResponse({
     status: 200,
@@ -102,7 +111,12 @@ export class ChallengeAttemptController {
   async submitAttempt(
     @ActiveUser() user: ActiveUserData,
     @Body() dto: SubmitAttemptDto,
+    @Headers('Idempotency-Key') idempotencyKey?: string,
   ): Promise<SubmitAttemptResponseDto> {
+    // Header takes precedence over body field for idempotency key.
+    if (idempotencyKey && !dto.idempotencyKey) {
+      dto.idempotencyKey = idempotencyKey;
+    }
     return this.challengeAttemptService.submitAttempt(
       dto,
       this.requireUserId(user),
