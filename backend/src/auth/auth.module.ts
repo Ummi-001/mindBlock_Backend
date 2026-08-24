@@ -23,7 +23,8 @@ import { ForgotPasswordProvider } from './providers/forgot-password.provider';
 import { ResetPasswordProvider } from './providers/reset-password.provider';
 import { MailService } from './providers/mail.service';
 import { NonceService } from './providers/nonce.service';
-
+import { Session } from './entities/session.entity';
+import { SessionsProvider } from './providers/sessions.provider';
 import { GuestSessionProvider } from './providers/guest-session.provider';
 
 @Module({
@@ -31,6 +32,7 @@ import { GuestSessionProvider } from './providers/guest-session.provider';
     forwardRef(() => UsersModule),
     TypeOrmModule.forFeature([User]),
     ConfigModule.forFeature(jwtConfig),
+    TypeOrmModule.forFeature([Session]),
     JwtModule.registerAsync(jwtConfig.asProvider()),
     ThrottlerModule.forRoot([
       {
@@ -54,6 +56,7 @@ import { GuestSessionProvider } from './providers/guest-session.provider';
     ResetPasswordProvider,
     MailService,
     NonceService,
+    SessionsProvider,
     {
       provide: HashingProvider, // Use the abstract class as a token
       useClass: BcryptProvider, // Bind it to the concrete implementation

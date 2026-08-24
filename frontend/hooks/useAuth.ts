@@ -8,6 +8,7 @@ import {
   selectAuthLoading,
   selectAuthError,
   selectToken,
+  selectRefreshToken,
   selectIsRestoring,
   loginSuccess,
   loginFailure,
@@ -32,20 +33,38 @@ export function useAuth() {
   const isLoading = useAppSelector(selectAuthLoading);
   const error = useAppSelector(selectAuthError);
   const token = useAppSelector(selectToken);
+  const refreshTokenValue = useAppSelector(selectRefreshToken);
   const isRestoring = useAppSelector(selectIsRestoring);
 
   // Actions
-  const handleLoginSuccess = useCallback((user: User, token: string) => {
-    dispatch(loginSuccess({ user, token }));
-  }, [dispatch]);
+  const handleLoginSuccess = useCallback((user: User, token: string, refreshToken?: string) => {
+    dispatch(loginSuccess({ user, token, refreshToken: refreshToken ?? refreshTokenValue ?? '' }));
+  }, [dispatch, refreshTokenValue]);
 
   const handleLoginFailure = useCallback((error: string) => {
     dispatch(loginFailure(error));
   }, [dispatch]);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    if (refreshTokenValue) {
+      try {
+        // Call backend logout endpoint to invalidate the session
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ refreshToken: refreshTokenValue }),
+        });
+      } catch (error) {
+        console.error('Logout error:', error);
+      }
+    }
+    // Clear local state regardless of backend response
     dispatch(logout());
-  }, [dispatch]);
+    // Redirect to signin page
+    window.location.href = '/auth/signin';
+  }, [dispatch, refreshTokenValue]);
 
   const handleClearError = useCallback(() => {
     dispatch(clearError());
@@ -82,8 +101,9 @@ export function useAuth() {
     isLoading,
     error,
     token,
+    refreshTokenValue,
     isRestoring,
-    
+
     // Actions
     loginSuccess: handleLoginSuccess,
     loginFailure: handleLoginFailure,
@@ -117,6 +137,10 @@ export function useAuthError() {
 
 export function useAuthToken() {
   return useAppSelector(selectToken);
+}
+
+export function useRefreshToken() {
+  return useAppSelector(selectRefreshToken);
 }
 
 export function useIsRestoring() {
