@@ -5,13 +5,11 @@ import {
   RequestTimeoutException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UsersService } from '../../users/providers/users.service';
 import { User } from '../../users/user.entity';
 import { HashingProvider } from './hashing.provider';
-import jwtConfig from '../authConfig/jwt.config';
 import { LoginDto } from '../dtos/login.dto';
 import { SessionsProvider } from './sessions.provider';
 
@@ -28,10 +26,6 @@ export class SignInProvider {
 
     // injecting hashing dependency
     private readonly hashingProvider: HashingProvider,
-
-    // inject jwt configuration
-    @Inject(jwtConfig.KEY)
-    private readonly jwtConfiguration: ConfigType<typeof jwtConfig>,
 
     // inject sessions provider for secure session management
     private readonly sessionsProvider: SessionsProvider,
@@ -74,19 +68,7 @@ export class SignInProvider {
       });
     }
 
-    const accessToken = await this.jwtService.signAsync(
-      {
-        sub: user.id,
-        email: user.email,
-      },
-      {
-        audience: this.jwtConfiguration.audience,
-        issuer: this.jwtConfiguration.issuer,
-        expiresIn: this.jwtConfiguration.ttl,
-      },
-    );
-
-    // login
-    return { accessToken };
+    // Create a secure session and return the tokens expected by the frontend
+    return await this.sessionsProvider.createSession(user);
   }
 }
