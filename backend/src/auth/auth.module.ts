@@ -2,7 +2,9 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthService } from './providers/auth.service';
 import { UsersModule } from '../users/users.module';
+import { User } from '../users/user.entity';
 import { SignInProvider } from './providers/sign-in.provider';
+import { RegisterProvider } from './providers/register.provider';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { HashingProvider } from './providers/hashing.provider';
@@ -28,6 +30,7 @@ import { GuestSessionProvider } from './providers/guest-session.provider';
 @Module({
   imports: [
     forwardRef(() => UsersModule),
+    TypeOrmModule.forFeature([User]),
     ConfigModule.forFeature(jwtConfig),
     TypeOrmModule.forFeature([Session]),
     JwtModule.registerAsync(jwtConfig.asProvider()),
@@ -44,6 +47,7 @@ import { GuestSessionProvider } from './providers/guest-session.provider';
     GuestSessionProvider,
     JwtStrategy,
     SignInProvider,
+    RegisterProvider,
     RefreshTokensProvider,
     GenerateTokensProvider,
     GoogleAuthenticationService,

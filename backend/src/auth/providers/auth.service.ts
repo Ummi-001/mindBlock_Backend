@@ -1,6 +1,8 @@
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { LoginDto } from '../dtos/login.dto';
+import { RegisterDto } from '../dtos/register.dto';
 import { SignInProvider } from './sign-in.provider';
+import { RegisterProvider } from './register.provider';
 import { ApiBody, ApiOperation } from '@nestjs/swagger';
 import { RefreshTokenDto } from '../dtos/refreshTokenDto';
 import { RefreshTokensProvider } from './refreshTokensProvider';
@@ -22,6 +24,11 @@ export class AuthService {
      * inject signInProvider
      */
     private readonly signInProvider: SignInProvider,
+
+    /**
+     * inject registerProvider
+     */
+    private readonly registerProvider: RegisterProvider,
 
     /**
      *  inject stellarWalletLoginProvider
@@ -58,6 +65,10 @@ export class AuthService {
      */
     private readonly usersService: UsersService,
   ) {}
+
+  public async register(registerDto: RegisterDto) {
+    return await this.registerProvider.register(registerDto);
+  }
 
   public async SignIn(signInDto: LoginDto) {
     return await this.signInProvider.SignIn(signInDto);
