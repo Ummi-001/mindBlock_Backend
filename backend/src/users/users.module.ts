@@ -41,6 +41,6 @@ import { BlockchainModule } from '../blockchain/blockchain.module';
     UpdateUserService,
     XpLevelService,
   ],
-  exports: [UsersService, TypeOrmModule, XpLevelService],
+  exports: [UsersService, CreateUserService, TypeOrmModule, XpLevelService],
 })
 export class UsersModule {}
