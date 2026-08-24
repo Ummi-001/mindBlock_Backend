@@ -37,9 +37,9 @@ export function useAuth() {
   const isRestoring = useAppSelector(selectIsRestoring);
 
   // Actions
-  const handleLoginSuccess = useCallback((user: User, token: string) => {
-    dispatch(loginSuccess({ user, token }));
-  }, [dispatch]);
+  const handleLoginSuccess = useCallback((user: User, token: string, refreshToken?: string) => {
+    dispatch(loginSuccess({ user, token, refreshToken: refreshToken ?? refreshTokenValue ?? '' }));
+  }, [dispatch, refreshTokenValue]);
 
   const handleLoginFailure = useCallback((error: string) => {
     dispatch(loginFailure(error));
@@ -101,9 +101,9 @@ export function useAuth() {
     isLoading,
     error,
     token,
-    refreshToken: refreshTokenValue,
+    refreshTokenValue,
     isRestoring,
-    
+
     // Actions
     loginSuccess: handleLoginSuccess,
     loginFailure: handleLoginFailure,
