@@ -21,7 +21,6 @@ export interface ErrorResponse {
   code: string;
   errorCode: string; // Maintain backwards compatibility
   message: string;
-  code: string;
   timestamp: string;
   path: string;
   /** Field-level validation details — only present on validation errors. */
@@ -116,11 +115,9 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const body: ErrorResponse = {
       success: false,
       statusCode: resolved.status,
-      error: errorName,
       code: responseCode,
       errorCode: resolved.errorCode, // Maintain backwards compatibility
       message: resolved.message,
-      code: resolved.errorCode,
       timestamp,
       path,
       requestId: correlationId,
